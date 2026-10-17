@@ -36,3 +36,7 @@ export const GenerateRequestSchema = z.object({
 export const SubmitRequestSchema = z.object({
   code: nonEmptyString.max(100_000),
 });
+
+export const QueryListSchema = z.object({
+  lang: z.enum(LANGUAGES).exactOptional(),
+});

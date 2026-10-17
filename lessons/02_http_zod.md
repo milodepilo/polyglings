@@ -95,5 +95,90 @@ Food for thought: you'll notice that many fields are "a non-empty string". How d
 
 ---
 
-# Part B – Fastify
-*(follows after 2a)*
+# Part B – Fastify: your first HTTP server
+
+## What's already there
+| file | who | what |
+|---|---|---|
+| `src/store.ts` | given | `ExerciseStore` interface + `MemoryStore` (a Map). In milestone 3 you write a SQLite version with the **same interface**. |
+| `src/main.ts` | given | creates a store with 1 sample exercise, calls `buildApp`, starts listening on port 3000 |
+| `src/app.ts` | **you** | `buildApp(store)`: all the routes |
+| `test/app.test.ts` | given | the spec |
+
+Read `store.ts` first. It's short, and you'll be using `store.get()` and `store.list()`.
+
+## Why `buildApp` and not just `app.listen()` straight away?
+`buildApp` *builds* the app but doesn't start it. That gives you two ways to use it:
+- `main.ts` → `app.listen()`: a real server on a port
+- tests → `app.inject()`: Fastify simulates a request **without a network**. That's fast, there are no port conflicts, and every test gets a fresh app.
+
+The store is passed in as a **parameter** (dependency injection) instead of being created inside `buildApp`. That way the tests can pass in their own `MemoryStore` with known data, and later `main.ts` can pass in a SQLite store.
+
+## A route
+```ts
+app.get("/ping", async (request, reply) => {
+  return { pong: true };          // returned object → 200 + JSON
+});
+```
+- **return a value**: Fastify sends it as JSON with status 200
+- **another status**: `return reply.code(404).send({ error: "..." });`
+  The `return` matters: without it your handler keeps running after the `send`.
+
+## Params, query and body
+```ts
+// GET /users/42?verbose=true   POST with JSON body
+request.params   // { id: "42" }          from the URL pattern /users/:id
+request.query    // { verbose: "true" }   always strings!
+request.body     // the parsed JSON body  (unknown, so validate it)
+```
+To type `params`, give the route a **generic**:
+```ts
+app.get<{ Params: { id: string } }>("/users/:id", async (request, reply) => {
+  request.params.id;   // string, TS knows this now
+});
+```
+**Don't** do that for `body` and `query`: they come from outside. Typing them as `{ code: string }` is a lie to TS (the same as `as`). Use `safeParse` and let zod tell you what's really there.
+
+## Validation in a handler
+```ts
+app.post("/users", async (request, reply) => {
+  const parsed = UserSchema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ error: "invalid body", issues: parsed.error.issues });
+  }
+  parsed.data;   // fully typed and checked from here on
+});
+```
+For `?lang=` you need a small schema for the **query**. It doesn't exist yet, so write one yourself: in `schemas.ts`, or inline in `app.ts`. Watch out: `?lang` is optional, so... you know which `optional` by now. And what does your `store.list()` expect when there's no `lang`?
+
+## Status codes you need
+| code | meaning | when |
+|---|---|---|
+| 200 | OK | all good |
+| 400 | Bad Request | the client sent something invalid (body/query) |
+| 404 | Not Found | the thing doesn't exist (unknown id) |
+| 501 | Not Implemented | the route exists, but the functionality is still missing |
+
+The 501 is honest: `submit` and `generate` validate their input properly now, but the runner (milestone 4) and generator (milestone 5) don't exist yet. Later you'll only replace the 501 with the real work, and the validation stays.
+
+## Watch out: a 404 you didn't write yourself
+Fastify returns a **404 with an `error` field by itself** for routes that don't exist. So without any code, two 404 tests already pass. Once you register `/exercises/:id`, Fastify's 404 no longer applies there, and the test only passes if *your* code returns the 404. Don't let a green test fool you before your route even exists.
+
+## Running it for real
+```bash
+cd server && npm run dev          # tsx watch: restarts on every save
+```
+In another pane:
+```bash
+curl localhost:3000/health
+curl localhost:3000/exercises
+curl localhost:3000/exercises/ts-0001
+curl -X POST localhost:3000/exercises/generate \
+  -H 'content-type: application/json' -d '{"lang":"rust"}'
+```
+`-H 'content-type: application/json'` matters: without it, Fastify doesn't parse the body as JSON.
+
+## Exercise 2b
+Fill in `server/src/app.ts` (see `TODO(human)`). One route at a time. Start with `/health`, run `npm test`, then the next one.
+
+Food for thought: in `POST /exercises/:id/submit` you check two things, the body (400) and whether the exercise exists (404). Which do you check **first**, and why? The tests allow both orders.
