@@ -25,5 +25,5 @@ export interface Exercise {
 export type CheckResult =
   | { status: "pass" }
   | { status: "fail"; output: string }
-  | { status: "timeout"; output: string }
+  | { status: "timeout" }
   | { status: "compile_error"; output: string };
