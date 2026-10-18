@@ -19,7 +19,12 @@ export interface ProcessOptions {
 
 export type ProcessResult =
   // code is null when the process was killed by a signal (crash, or our own kill)
-  | { kind: "exit"; code: number | null; signal: NodeJS.Signals | null; output: string }
+  | {
+      kind: "exit";
+      code: number | null;
+      signal: NodeJS.Signals | null;
+      output: string;
+    }
   | { kind: "timeout" };
 
 // appended to the output when it was cut off at maxOutputBytes
@@ -31,13 +36,60 @@ export function runProcess(
   opts: ProcessOptions,
 ): Promise<ProcessResult> {
   // TODO(human): implement runProcess (part 1) and check (part 3); spec: test/runner.test.ts
+  //
   //   runProcess: spawn cmd, collect stdout + stderr into one output, and resolve once it's done.
   //     - stdin must not be left open (a program that reads stdin would wait forever)
   //     - kill it after opts.timeoutMs        → { kind: "timeout" }
   //     - kill it after opts.maxOutputBytes   → output cut off + TRUNCATED
   //     - a command that doesn't exist        → reject
   //   check: see part 3 below. Part 2 (TOOLCHAINS) is given.
-  throw new Error("not implemented");
+  return new Promise((resolve, reject) => {
+    const data: Buffer[] = [];
+    let timedOut = false;
+    let count = 0;
+    let truncated = false;
+    const pushChunk = (chunk: Buffer) => {
+      if (truncated) return;
+      const chunkSize = chunk.length;
+      const room = opts.maxOutputBytes - count;
+      if (count + chunkSize <= opts.maxOutputBytes) {
+        data.push(chunk);
+        count += chunkSize;
+      } else {
+        truncated = true;
+        data.push(chunk.subarray(0, room));
+        child.kill("SIGKILL");
+      }
+    };
+    const child = spawn(cmd, args, {
+      cwd: opts.cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, opts.timeoutMs);
+    child.stdout.on("data", pushChunk);
+    child.stderr.on("data", pushChunk);
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+    child.on("close", (code, signal) => {
+      const result: ProcessResult = timedOut
+        ? { kind: "timeout" }
+        : {
+            kind: "exit",
+            code,
+            signal,
+            output:
+              Buffer.concat(data).toString("utf8") +
+              (truncated ? TRUNCATED : ""),
+          };
+      clearTimeout(timer);
+      resolve(result);
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -76,13 +128,19 @@ export const TOOLCHAINS: Record<Language, Toolchain> = {
       "main.ts": code,
       "main.test.ts": tests,
     }),
-    steps: [{ kind: "run", cmd: process.execPath, args: [TSX_CLI, "main.test.ts"] }],
+    steps: [
+      { kind: "run", cmd: process.execPath, args: [TSX_CLI, "main.test.ts"] },
+    ],
   },
   // tests do: #include "main.cpp" and define main() with assert()s
   cpp: {
     files: (code, tests) => ({ "main.cpp": code, "test.cpp": tests }),
     steps: [
-      { kind: "compile", cmd: "g++", args: ["-std=c++20", "-Wall", "-o", "test", "test.cpp"] },
+      {
+        kind: "compile",
+        cmd: "g++",
+        args: ["-std=c++20", "-Wall", "-o", "test", "test.cpp"],
+      },
       { kind: "run", cmd: "./test", args: [] },
     ],
   },
