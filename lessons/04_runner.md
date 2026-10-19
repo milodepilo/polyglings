@@ -147,3 +147,43 @@ The `check` tests run real `node`, `tsx` and `g++`, so they take a few seconds.
 - **Grandchildren:** `child.kill()` only kills the direct child. If test code itself starts a process, that one keeps running. Look up `detached: true` and `process.kill(-child.pid)` (a minus sign = the whole process group).
 - **TypeScript without types:** `tsx` strips types without checking them. A TS exercise "add the right types" passes even with wrong types. How would you add a `tsc --noEmit` step as `compile`, and what would that cost on the Pi?
 - **A crash without output:** a segfault gives `fail` with an empty `output`. How would you tell the user what happened? (`signal` is in your `ProcessResult`.)
+
+## Part 4: wiring check() into the API
+`POST /exercises/:id/submit` still answers `501`. Now that `check` works, the route can use it. One question first: **how does the route get hold of `check`?**
+
+### Dependency injection
+The obvious way is `import { check } from "./runner.js"` and calling it in the route. That works, but then every app test runs real `node` or `g++`: slow, and you can't easily test "what if the checker crashes?".
+
+The alternative: `buildApp` **receives** the checker as a parameter, just like it already receives the `store`:
+```ts
+// example: a mailer you don't want to really send during tests (not your code!)
+type Mailer = (to: string, body: string) => Promise<void>;
+
+function buildShop(db: Db, mailer: Mailer = sendRealMail) {
+  // ...somewhere in a route:
+  await mailer(order.email, "Thanks for your order!");
+}
+
+buildShop(db);                          // production: real mails
+buildShop(db, async () => {});          // test: nothing is sent
+```
+The **default parameter** (`= sendRealMail`) keeps `main.ts` unchanged, and the tests pass a fake. That's the same reason `buildApp` gets an `ExerciseStore` interface instead of `new SqliteStore()`: the code depends on *what* something does, not *which* implementation it is.
+
+`app.ts` now has `type Checker` and a third parameter `checker: Checker = check`. Your real `check` fits that type even though it has an extra 4th parameter (`opts`). It's optional, so a caller with 3 arguments is fine.
+
+### Errors in an async route
+If your handler returns a value, Fastify sends it as 200 + JSON. If your handler **throws** (or the Promise you `await` rejects), Fastify catches it and answers **500**. You don't need a `try/catch` for "g++ is not installed": `check` rejects, and the client gets a 500. A `fail` is *not* an error, though. That's a normal result and goes out as 200.
+
+### Exercise 4b
+In `src/app.ts`, see `TODO(human)` in the submit route. The tests:
+```bash
+npx vitest run test/app.test.ts -t "submit"
+```
+They check, among other things, that the checker is **not** called for a 400 or a 404, and one test uses the real runner (no fake) to prove the default works.
+
+Then try it by hand: `npm run dev`, and in another pane:
+```bash
+curl -s -X POST localhost:3000/exercises/ts-0001/submit \
+  -H 'content-type: application/json' -d '{"code":"export const x = 1;"}'
+```
+(The seed exercise in `main.ts` has fake tests, `// ...`, so whatever you send passes as long as it runs. Real exercises arrive in milestone 5.)

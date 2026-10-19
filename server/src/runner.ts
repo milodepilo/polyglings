@@ -41,11 +41,11 @@ export function runProcess(
     const pushChunk = (chunk: Buffer) => {
       if (truncated) return;
       const chunkSize = chunk.length;
-      const room = opts.maxOutputBytes - count;
       if (count + chunkSize <= opts.maxOutputBytes) {
         data.push(chunk);
         count += chunkSize;
       } else {
+        const room = opts.maxOutputBytes - count;
         truncated = true;
         data.push(chunk.subarray(0, room));
         child.kill("SIGKILL");

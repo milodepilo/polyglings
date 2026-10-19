@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
-import { buildApp } from "../src/app.js";
+import { buildApp, type Checker } from "../src/app.js";
 import { MemoryStore } from "../src/store.js";
-import type { Exercise } from "../src/types.js";
+import type { CheckResult, Exercise } from "../src/types.js";
 
 const tsExercise: Exercise = {
   id: "ts-0001",
@@ -27,9 +27,19 @@ const cppExercise: Exercise = {
 
 let app: FastifyInstance;
 
+// fake runner: records what it was called with and returns whatever checkResult is set to
+let checkCalls: Parameters<Checker>[];
+let checkResult: CheckResult;
+const fakeCheck: Checker = async (...args) => {
+  checkCalls.push(args);
+  return checkResult;
+};
+
 beforeEach(() => {
   // a fresh app + store per test, so tests can't influence each other
-  app = buildApp(new MemoryStore([tsExercise, cppExercise]));
+  checkCalls = [];
+  checkResult = { status: "pass" };
+  app = buildApp(new MemoryStore([tsExercise, cppExercise]), {}, fakeCheck);
 });
 
 afterEach(async () => {
@@ -97,10 +107,66 @@ describe("POST /exercises/:id/submit", () => {
     expect(res.json()).toHaveProperty("error");
   });
 
-  it("returns 501 for a valid submission (runner comes in milestone 4)", async () => {
-    const res = await submit("ts-0001", { code: "export function first() {}" });
-    expect(res.statusCode).toBe(501);
-    expect(res.json()).toHaveProperty("error");
+  it("does not run the checker for a 400 or a 404", async () => {
+    await submit("ts-0001", {});
+    await submit("nope", { code: "x" });
+    expect(checkCalls).toEqual([]);
+  });
+
+  it("checks the submitted code against the exercise's lang and tests", async () => {
+    const code = "export function first<T>(xs: T[]) { return xs[0]; }";
+    await submit("ts-0001", { code });
+    expect(checkCalls).toEqual([["ts", code, tsExercise.tests]]);
+  });
+
+  it("answers 200 with the CheckResult, for every status", async () => {
+    const results: CheckResult[] = [
+      { status: "pass" },
+      { status: "fail", output: "AssertionError: 1 !== 2" },
+      { status: "timeout" },
+      { status: "compile_error", output: "error: expected ';'" },
+    ];
+    for (const result of results) {
+      checkResult = result;
+      const res = await submit("cpp-0001", { code: "int main() {}" });
+      expect(res.statusCode, result.status).toBe(200);
+      expect(res.json()).toEqual(result);
+    }
+  });
+
+  it("answers 500 when the checker itself fails (e.g. g++ not installed)", async () => {
+    const broken = buildApp(new MemoryStore([cppExercise]), {}, async () => {
+      throw new Error("spawn g++ ENOENT");
+    });
+    const res = await broken.inject({
+      method: "POST",
+      url: "/exercises/cpp-0001/submit",
+      payload: { code: "int main() {}" },
+    });
+    await broken.close();
+    expect(res.statusCode).toBe(500);
+  });
+
+  it("uses the real runner when no checker is passed", async () => {
+    const jsExercise: Exercise = {
+      ...tsExercise,
+      id: "js-0001",
+      lang: "js",
+      tests: [
+        'import assert from "node:assert";',
+        'import { double } from "./main.js";',
+        "assert.equal(double(21), 42);",
+      ].join("\n"),
+    };
+    const real = buildApp(new MemoryStore([jsExercise]));
+    const send = (code: string) =>
+      real.inject({ method: "POST", url: "/exercises/js-0001/submit", payload: { code } });
+    try {
+      expect((await send("export const double = (n) => n * 2;")).json()).toEqual({ status: "pass" });
+      expect((await send("export const double = (n) => n;")).json()).toMatchObject({ status: "fail" });
+    } finally {
+      await real.close();
+    }
   });
 });
 

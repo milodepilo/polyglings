@@ -6,14 +6,27 @@ import Fastify, {
   type FastifyServerOptions,
 } from "fastify";
 import type { ExerciseStore } from "./store.js";
+import { check } from "./runner.js";
+import type { CheckResult, Language } from "./types.js";
 import {
   QueryListSchema,
   GenerateRequestSchema,
   SubmitRequestSchema,
 } from "./schemas.js";
+
+// What the submit route needs from the runner. The default is the real check();
+// tests pass a fake, so they don't run g++ and can choose the result themselves.
+// Lesson: ../lessons/04_runner.md (part 4)
+export type Checker = (
+  lang: Language,
+  code: string,
+  tests: string,
+) => Promise<CheckResult>;
+
 export function buildApp(
   store: ExerciseStore,
   opts: FastifyServerOptions = {},
+  checker: Checker = check,
 ): FastifyInstance {
   const app = Fastify(opts);
 
@@ -49,7 +62,12 @@ export function buildApp(
       } else if (!parsedBody.success) {
         return reply.code(400).send({ error: "bad body" });
       }
-      return reply.code(501).send({ error: "not implemented" });
+      // TODO(human): run the submission through checker and answer with its CheckResult
+      return checker(
+        exerciseById.lang,
+        parsedBody.data.code,
+        exerciseById.tests,
+      );
     },
   );
   app.post("/exercises/generate", async (request, reply) => {
