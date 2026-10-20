@@ -83,9 +83,23 @@ export function buildApp(
     if (!parsedBody.success) {
       return reply.code(400).send({ error: "bad body" });
     }
-    // TODO(human): generate an exercise (difficulty 1 for now), store it, answer 201 with it;
-    // a GenerationError → 502 { error, reasons } (spec: test/app.test.ts, lesson 05 part 4)
-    return reply.code(501).send({ error: "not implemented" });
+    const { lang, topic } = parsedBody.data;
+    try {
+      const exercise = await generate({
+        lang,
+        difficulty: 1,
+        ...(topic !== undefined ? { topic } : {}),
+      });
+      store.add(exercise);
+      return reply.code(201).send(exercise);
+    } catch (err) {
+      if (err instanceof GenerationError) {
+        return reply
+          .code(502)
+          .send({ error: "no exercise generated", reasons: err.reasons });
+      }
+      throw err;
+    }
   });
 
   return app;
