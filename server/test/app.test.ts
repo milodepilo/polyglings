@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
-import { buildApp, type Checker } from "../src/app.js";
+import { buildApp } from "../src/app.js";
+import type { Checker } from "../src/runner.js";
 import { MemoryStore } from "../src/store.js";
 import type { CheckResult, Exercise } from "../src/types.js";
 

@@ -137,6 +137,14 @@ export interface CheckOptions {
   tmpRoot?: string; // where the temp dir is created (default: the OS temp dir)
 }
 
+// What callers (the submit route, the generator) need from the runner. The real one
+// is check() below; tests pass a fake, so they don't run g++ and can pick the result.
+export type Checker = (
+  lang: Language,
+  code: string,
+  tests: string,
+) => Promise<CheckResult>;
+
 export const CHECK_DEFAULTS = {
   timeoutMs: 5_000,
   compileTimeoutMs: 30_000,
