@@ -20,7 +20,7 @@ if (store.list().length === 0) {
     createdAt: new Date().toISOString(),
   });
 }
-const app = buildApp(store, { logger: true });
+const app = buildApp({ store }, { logger: true });
 const port = Number(process.env.PORT ?? 3000);
 
 // 0.0.0.0 = reachable from other machines too (needed on the Pi), not just localhost

@@ -8,16 +8,35 @@ import Fastify, {
 import type { ExerciseStore } from "./store.js";
 import { check, type Checker } from "./runner.js";
 import {
+  claudeCli,
+  generateExercise,
+  GenerationError,
+  type GenerationRequest,
+} from "./generator.js";
+import type { Exercise } from "./types.js";
+import {
   QueryListSchema,
   GenerateRequestSchema,
   SubmitRequestSchema,
 } from "./schemas.js";
 
+// Everything the routes depend on. Only the store is required: the others default
+// to the real thing, and tests pass fakes (lesson 04 part 4, lesson 05 part 4).
+export interface AppDeps {
+  store: ExerciseStore;
+  checker?: Checker;
+  generate?: (req: GenerationRequest) => Promise<Exercise>;
+}
+
 export function buildApp(
-  store: ExerciseStore,
+  deps: AppDeps,
   opts: FastifyServerOptions = {},
-  checker: Checker = check, // tests pass a fake (lesson 04, part 4)
 ): FastifyInstance {
+  const {
+    store,
+    checker = check,
+    generate = (req) => generateExercise(req, { llm: claudeCli(), checker }),
+  } = deps;
   const app = Fastify(opts);
 
   app.get("/health", async () => {
@@ -64,6 +83,8 @@ export function buildApp(
     if (!parsedBody.success) {
       return reply.code(400).send({ error: "bad body" });
     }
+    // TODO(human): generate an exercise (difficulty 1 for now), store it, answer 201 with it;
+    // a GenerationError → 502 { error, reasons } (spec: test/app.test.ts, lesson 05 part 4)
     return reply.code(501).send({ error: "not implemented" });
   });
 

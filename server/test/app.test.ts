@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/app.js";
+import { GenerationError, type GenerationRequest } from "../src/generator.js";
 import type { Checker } from "../src/runner.js";
 import { MemoryStore } from "../src/store.js";
 import type { CheckResult, Exercise } from "../src/types.js";
@@ -36,11 +37,26 @@ const fakeCheck: Checker = async (...args) => {
   return checkResult;
 };
 
+// fake generator: records the requests, returns generated (or throws generateError)
+let generateCalls: GenerationRequest[];
+let generateError: Error | undefined;
+const generated: Exercise = { ...tsExercise, id: "ts-9f3a1c2e", topic: "Generic functions" };
+const fakeGenerate = async (req: GenerationRequest): Promise<Exercise> => {
+  generateCalls.push(req);
+  if (generateError) throw generateError;
+  return generated;
+};
+
+let store: MemoryStore;
+
 beforeEach(() => {
   // a fresh app + store per test, so tests can't influence each other
   checkCalls = [];
   checkResult = { status: "pass" };
-  app = buildApp(new MemoryStore([tsExercise, cppExercise]), {}, fakeCheck);
+  generateCalls = [];
+  generateError = undefined;
+  store = new MemoryStore([tsExercise, cppExercise]);
+  app = buildApp({ store, checker: fakeCheck, generate: fakeGenerate });
 });
 
 afterEach(async () => {
@@ -136,8 +152,11 @@ describe("POST /exercises/:id/submit", () => {
   });
 
   it("answers 500 when the checker itself fails (e.g. g++ not installed)", async () => {
-    const broken = buildApp(new MemoryStore([cppExercise]), {}, async () => {
-      throw new Error("spawn g++ ENOENT");
+    const broken = buildApp({
+      store: new MemoryStore([cppExercise]),
+      checker: async () => {
+        throw new Error("spawn g++ ENOENT");
+      },
     });
     const res = await broken.inject({
       method: "POST",
@@ -159,7 +178,7 @@ describe("POST /exercises/:id/submit", () => {
         "assert.equal(double(21), 42);",
       ].join("\n"),
     };
-    const real = buildApp(new MemoryStore([jsExercise]));
+    const real = buildApp({ store: new MemoryStore([jsExercise]) });
     const send = (code: string) =>
       real.inject({ method: "POST", url: "/exercises/js-0001/submit", payload: { code } });
     try {
@@ -183,9 +202,43 @@ describe("POST /exercises/generate", () => {
     }
   });
 
-  it("returns 501 for a valid request (generator comes in milestone 5)", async () => {
+  it("does not call the generator for a bad body", async () => {
+    await generate({ lang: "rust" });
+    expect(generateCalls).toEqual([]);
+  });
+
+  it("generates at difficulty 1 with the requested lang and topic", async () => {
+    await generate({ lang: "ts", topic: "generics" });
+    await generate({ lang: "js" });
+    expect(generateCalls).toStrictEqual([
+      { lang: "ts", topic: "generics", difficulty: 1 },
+      { lang: "js", difficulty: 1 }, // no topic key at all
+    ]);
+  });
+
+  it("answers 201 with the new exercise and stores it", async () => {
     const res = await generate({ lang: "ts", topic: "generics" });
-    expect(res.statusCode).toBe(501);
-    expect(res.json()).toHaveProperty("error");
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toEqual(generated);
+    const get = await app.inject({ method: "GET", url: `/exercises/${generated.id}` });
+    expect(get.json()).toEqual(generated);
+  });
+
+  it("answers 502 with the reasons when no valid exercise could be made, and stores nothing", async () => {
+    generateError = new GenerationError(["the solution gave fail", "the starter gave pass"]);
+    const res = await generate({ lang: "cpp" });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({
+      error: expect.any(String),
+      reasons: ["the solution gave fail", "the starter gave pass"],
+    });
+    expect(store.list()).toHaveLength(2);
+  });
+
+  it("answers 500 for any other error (e.g. claude not logged in)", async () => {
+    generateError = new Error("claude failed (1): not logged in");
+    const res = await generate({ lang: "ts" });
+    expect(res.statusCode).toBe(500);
+    expect(store.list()).toHaveLength(2);
   });
 });
