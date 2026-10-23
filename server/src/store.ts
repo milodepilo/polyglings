@@ -22,6 +22,8 @@ export interface ExerciseStore {
   addSubmission(submission: Submission): void;
   // one entry per exercise with at least one "pass", dated by its FIRST pass; any order
   listSolved(): SolvedExercise[];
+  // every exercise without a "pass" yet (milestone 7); any order
+  listOpen(): Exercise[];
 }
 
 // Simple Map-backed store for development and tests. Lost on restart.
@@ -65,5 +67,12 @@ export class MemoryStore implements ExerciseStore {
       const { lang, difficulty } = this.exercises.get(id)!; // addSubmission checked it exists
       return { lang, difficulty, solvedAt };
     });
+  }
+
+  listOpen(): Exercise[] {
+    const passed = new Set(
+      this.submissions.filter((s) => s.status === "pass").map((s) => s.exerciseId),
+    );
+    return this.list().filter((e) => !passed.has(e.id));
   }
 }

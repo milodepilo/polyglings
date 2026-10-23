@@ -52,3 +52,8 @@ export const LIST_SOLVED = /* sql */ `
   JOIN exercises e ON e.id = s.exercise_id
   WHERE s.status = 'pass'
   GROUP BY s.exercise_id`;
+
+// Milestone 7 (given). Every exercise that has no "pass" yet, whether you tried it or not.
+export const LIST_OPEN = /* sql */ `
+  SELECT * FROM exercises
+  WHERE id NOT IN (SELECT exercise_id FROM submissions WHERE status = 'pass')`;

@@ -71,6 +71,12 @@ export class SqliteStore implements ExerciseStore {
     return rows.map((row) => this.rowToSolvedExercise(row));
   }
 
+  // milestone 7 (given)
+  listOpen(): Exercise[] {
+    const rows = this.db.prepare(sql.LIST_OPEN).all();
+    return rows.map((row) => this.rowToExercise(row));
+  }
+
   close(): void {
     this.db.close();
   }

@@ -137,6 +137,20 @@ describe.each(stores)("%s", (_, make) => {
       expect(() => submit("nope", "pass", 1)).toThrow();
       expect(store.listSolved()).toEqual([]);
     });
+
+    // milestone 7: the scheduler only generates when nothing is open
+    it("lists exercises without a pass as open, tried or not", () => {
+      store = make();
+      expect(store.listOpen()).toEqual([]);
+      store.add(tsExercise);
+      store.add(cppExercise);
+      store.add({ ...tsExercise, id: "ts-0002" });
+      submit("ts-0001", "fail", 1); // tried, not passed: still open
+      submit("cpp-0001", "fail", 2);
+      submit("cpp-0001", "pass", 3); // passed: not open
+      expect(ids(store.listOpen())).toEqual(["ts-0001", "ts-0002"]);
+      expect(store.listOpen().find((e) => e.id === "ts-0001")).toStrictEqual(tsExercise);
+    });
   });
 });
 
