@@ -40,3 +40,8 @@ export const SubmitRequestSchema = z.object({
 export const QueryListSchema = z.object({
   lang: z.enum(LANGUAGES).exactOptional(),
 });
+
+export const SolvedExerciseSchema = ExerciseSchema.pick({
+  lang: true,
+  difficulty: true,
+}).extend({ solvedAt: z.string() });

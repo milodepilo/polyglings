@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/app.js";
 import { GenerationError, type GenerationRequest } from "../src/generator.js";
@@ -240,5 +240,68 @@ describe("POST /exercises/generate", () => {
     const res = await generate({ lang: "ts" });
     expect(res.statusCode).toBe(500);
     expect(store.list()).toHaveLength(2);
+  });
+});
+
+describe("progress (milestone 6b)", () => {
+  const submit = (id: string) =>
+    app.inject({ method: "POST", url: `/exercises/${id}/submit`, payload: { code: "x" } });
+  const progress = async () => (await app.inject({ method: "GET", url: "/progress" })).json();
+  const start = { level: 1, towardNext: 0, solved: 0 };
+
+  it("GET /progress starts every language at level 1", async () => {
+    const res = await app.inject({ method: "GET", url: "/progress" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toStrictEqual({ cpp: start, js: start, ts: start });
+  });
+
+  it("records every checked submission, with its status and the current time", async () => {
+    const spy = vi.spyOn(store, "addSubmission");
+    const before = Date.now();
+    checkResult = { status: "fail", output: "AssertionError" };
+    await submit("ts-0001");
+    checkResult = { status: "pass" };
+    await submit("ts-0001");
+    expect(spy.mock.calls.map(([s]) => [s.exerciseId, s.status])).toEqual([
+      ["ts-0001", "fail"],
+      ["ts-0001", "pass"],
+    ]);
+    for (const [s] of spy.mock.calls) {
+      expect(Date.parse(s.submittedAt)).toBeGreaterThanOrEqual(before - 1000);
+      expect(Date.parse(s.submittedAt)).toBeLessThanOrEqual(Date.now() + 1000);
+    }
+  });
+
+  it("records nothing for a 400, a 404, or when the checker itself fails", async () => {
+    const spy = vi.spyOn(store, "addSubmission");
+    await app.inject({ method: "POST", url: "/exercises/ts-0001/submit", payload: {} });
+    await submit("nope");
+    const broken = buildApp({
+      store,
+      checker: async () => {
+        throw new Error("spawn g++ ENOENT");
+      },
+    });
+    await broken.inject({ method: "POST", url: "/exercises/cpp-0001/submit", payload: { code: "x" } });
+    await broken.close();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("a pass shows up in GET /progress", async () => {
+    await submit("ts-0001"); // fake checker: pass, difficulty 2 >= level 1
+    expect((await progress()).ts).toStrictEqual({ level: 1, towardNext: 1, solved: 1 });
+  });
+
+  it("generate uses your level for that language", async () => {
+    for (const id of ["ts-0002", "ts-0003"]) store.add({ ...tsExercise, id });
+    for (const id of ["ts-0001", "ts-0002", "ts-0003"]) await submit(id);
+    expect((await progress()).ts.level).toBe(2);
+
+    await app.inject({ method: "POST", url: "/exercises/generate", payload: { lang: "ts" } });
+    await app.inject({ method: "POST", url: "/exercises/generate", payload: { lang: "cpp" } });
+    expect(generateCalls.map((r) => [r.lang, r.difficulty])).toEqual([
+      ["ts", 2],
+      ["cpp", 1],
+    ]);
   });
 });

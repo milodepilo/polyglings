@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { SqliteStore } from "../src/sqlite-store.js";
-import { MemoryStore, type ExerciseStore } from "../src/store.js";
+import { MemoryStore, type ExerciseStore, type Submission } from "../src/store.js";
 import type { Exercise } from "../src/types.js";
 
 const tsExercise: Exercise = {
@@ -78,6 +78,66 @@ describe.each(stores)("%s", (_, make) => {
     store.add(tsExercise);
     expect(store.get("x' OR '1'='1")).toBeUndefined();
   });
+
+  describe("submissions", () => {
+    const at = (minute: number) => new Date(Date.UTC(2026, 9, 21, 9, minute)).toISOString();
+    const submit = (exerciseId: string, status: Submission["status"], minute: number) =>
+      store.addSubmission({ exerciseId, status, submittedAt: at(minute) });
+    const bySolvedAt = (xs: { solvedAt: string }[]) =>
+      xs.toSorted((a, b) => a.solvedAt.localeCompare(b.solvedAt));
+
+    it("has nothing solved at the start", () => {
+      store = make();
+      store.add(tsExercise);
+      expect(store.listSolved()).toEqual([]);
+    });
+
+    it("lists a passed exercise with its lang, difficulty and the time of the pass", () => {
+      store = make();
+      store.add(tsExercise);
+      submit("ts-0001", "pass", 5);
+      expect(store.listSolved()).toStrictEqual([{ lang: "ts", difficulty: 2, solvedAt: at(5) }]);
+    });
+
+    it("ignores fail, timeout and compile_error", () => {
+      store = make();
+      store.add(tsExercise);
+      submit("ts-0001", "fail", 1);
+      submit("ts-0001", "timeout", 2);
+      submit("ts-0001", "compile_error", 3);
+      expect(store.listSolved()).toEqual([]);
+    });
+
+    it("lists an exercise once, dated by its FIRST pass (not the first one stored)", () => {
+      store = make();
+      store.add(tsExercise);
+      submit("ts-0001", "fail", 1);
+      submit("ts-0001", "pass", 30); // stored first...
+      submit("ts-0001", "pass", 10); // ...but this one happened earlier
+      submit("ts-0001", "pass", 20);
+      expect(store.listSolved()).toStrictEqual([{ lang: "ts", difficulty: 2, solvedAt: at(10) }]);
+    });
+
+    it("lists every solved exercise", () => {
+      store = make();
+      store.add(tsExercise);
+      store.add(cppExercise);
+      store.add({ ...tsExercise, id: "ts-0002" }); // never passed
+      submit("cpp-0001", "pass", 7);
+      submit("ts-0001", "pass", 3);
+      submit("ts-0002", "fail", 4);
+      expect(bySolvedAt(store.listSolved())).toStrictEqual([
+        { lang: "ts", difficulty: 2, solvedAt: at(3) },
+        { lang: "cpp", difficulty: 5, solvedAt: at(7) },
+      ]);
+    });
+
+    it("refuses a submission for an exercise that doesn't exist", () => {
+      store = make();
+      expect(() => submit("nope", "pass", 1)).toThrow();
+      expect(store.listSolved()).toEqual([]);
+    });
+  });
 });
 
 describe("SqliteStore on disk", () => {
@@ -96,6 +156,25 @@ describe("SqliteStore on disk", () => {
 
     const second = new SqliteStore(file); // must not fail: the table already exists
     expect(second.get("cpp-0001")).toStrictEqual(cppExercise);
+    second.close();
+  });
+
+  it("keeps submissions too, and still refuses unknown exercises after reopening", () => {
+    dir = mkdtempSync(join(tmpdir(), "polyglings-"));
+    const file = join(dir, "test.db");
+    const submittedAt = "2026-10-21T09:00:00.000Z";
+
+    const first = new SqliteStore(file);
+    first.add(cppExercise);
+    first.addSubmission({ exerciseId: "cpp-0001", status: "pass", submittedAt });
+    first.close();
+
+    const second = new SqliteStore(file);
+    expect(second.listSolved()).toStrictEqual([{ lang: "cpp", difficulty: 5, solvedAt: submittedAt }]);
+    // the foreign key must hold for a reopened file too, not just a fresh table
+    expect(() =>
+      second.addSubmission({ exerciseId: "nope", status: "pass", submittedAt }),
+    ).toThrow();
     second.close();
   });
 });

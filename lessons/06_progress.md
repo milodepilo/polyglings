@@ -3,8 +3,8 @@
 Your generate route still has a hard-coded `difficulty: 1`. In this milestone, the server learns what your level is per language, so new exercises get harder as you solve more.
 
 Two parts:
-- **6a** (now): `src/progress.ts`, a pure function: list of solved exercises in → level per language out.
-- **6b** (later): store submissions in SQLite, `GET /progress`, and the generate route uses your level.
+- **6a**: `src/progress.ts`, a pure function: list of solved exercises in → level per language out.
+- **6b**: store submissions (the SQL is given, the TS is yours), `GET /progress`, and the generate route uses your level.
 
 ## The rules
 | rule | why |
@@ -86,3 +86,68 @@ Read the tests first: they're the spec. Pay special attention to "uses your leve
 - Failures don't count now. Should "solved after 1 submission" count more than "solved after 30"? What would you need for that, and where do you get it from in 6b?
 - Can you go back down a level? When would that be useful, and why is that annoying for motivation?
 - What if you (or Claude) misjudge a level-5 exercise and it's really level 2? How could the generator use your progress to calibrate itself?
+
+## Part B: submissions, `/progress` and your real level
+`computeProgress` needs a list of solved exercises. Those come from **submissions**: every time your code is checked, that gets stored. The SQL is **given** (`sql.ts`, and the table is already created in the constructor). Everything around it is TS, and yours.
+
+### What's already there
+| file | what |
+|---|---|
+| `src/store.ts` | type `Submission`, `ExerciseStore` has `addSubmission` and `listSolved`, `MemoryStore` implements them |
+| `src/sql.ts` | `CREATE_SUBMISSION_TABLE`, `INSERT_SUBMISSION`, `LIST_SOLVED` (given) |
+| `test/store.test.ts` | 7 contract tests for submissions, against both stores |
+| `test/app.test.ts` | 5 tests for the routes ("progress (milestone 6b)") |
+
+`MemoryStore` passes all store tests. Read its `listSolved`: that's the same logic as the SQL query, in TS.
+
+### The given SQL, briefly
+You don't have to write it, but you do need to know what comes out:
+- **`submissions`** has an `exercise_id` with `REFERENCES exercises(id)`: a **foreign key**. A submission for an exercise that doesn't exist? SQLite refuses it, and `run()` throws. That's the test "refuses a submission for an exercise that doesn't exist". So you don't need to check that in TS: the database does it. (`node:sqlite` turns foreign keys on for you; the `sqlite3` command-line tool has them off by default.)
+- **`LIST_SOLVED`** combines both tables (`JOIN`), keeps only passes (`WHERE`), makes one row per exercise (`GROUP BY`), and takes the earliest time (`MIN`). Each row looks like:
+  ```ts
+  { lang: "ts", difficulty: 2, solved_at: "2026-10-21T09:00:00.000Z" }
+  ```
+  Note: **`solved_at`**, snake_case, like `created_at` in milestone 3. Your TS type wants `solvedAt`.
+
+(Your `ON CONFLICT DO UPDATE` from milestone 3 pays off here: `INSERT OR REPLACE` would delete the exercise and reinsert it, and with submissions referring to it, the foreign key refuses that.)
+
+### 1. `addSubmission` and `listSolved` in SqliteStore
+**`addSubmission`**: `INSERT_SUBMISSION` uses named parameters `:exerciseId`, `:status`, `:submittedAt`. Those are exactly the keys of a `Submission`. Compare with your `add`.
+
+**`listSolved`**: a row is a `Record<string, SQLOutputValue>`, not a `SolvedExercise`. Two steps, as in `rowToExercise`:
+1. **Rename**: `solved_at` → `solvedAt` (destructure + rest, as you did with `created_at`).
+2. **Validate**: with a small zod schema. You don't need to write it from scratch; you can derive it:
+   ```ts
+   // example: a schema for "a user's name + email + when they signed up"
+   const SignupSchema = UserSchema.pick({ name: true, email: true })   // reuse two fields
+     .extend({ signedUpAt: z.string() });                               // + one new one
+   ```
+   `.pick` takes fields from an existing schema (with their rules: `lang` must be `cpp | ts | js`, `difficulty` 1–10), and `.extend` adds new ones. You saw `.pick` in `generator.ts`.
+
+### 2. Record submissions
+In the submit route: after `checker(...)` you have a `CheckResult`. Store a `Submission` with:
+- the exercise id
+- the **status** of the result (not the whole result: `output` doesn't go into the table)
+- the current time as an ISO string
+
+Then return the result, as before. Watch the **order**: a submission only exists once it has been checked. If the checker fails (500), nothing should be stored. If you save the result in a `const` before you return it, that happens automatically.
+
+### 3. `GET /progress`
+A new route. Everything is there already: `store.listSolved()` gives you the solves, and your `computeProgress` turns them into levels. The route is just glue between the two. Fastify turns your returned object into JSON automatically, as with `/health`.
+
+### 4. Generate with your real level
+`difficulty: 1` becomes your level for **the requested language**. `computeProgress(...)` gives you a `Progress`, so `Record<Language, LangProgress>`. How do you get the `level` of one language out of that? Note: `lang` from the body is a `Language` (zod already checked that), so TS knows the key exists.
+
+### Exercise 6b
+See `TODO(human)` in `src/app.ts`; it lists all four spots.
+```bash
+npx vitest run test/store.test.ts -t "submissions"   # step 1
+npx vitest run test/app.test.ts -t "progress"         # steps 2-4
+npx vitest run                                        # everything
+```
+Then for real: `npm run dev`, submit something with curl, and look at `curl -s localhost:3000/progress | jq`.
+
+### Food for thought
+- `GET /progress` computes everything again on each request. When would that get slow? (Hint: how many submissions do you create per day with watch mode?)
+- In watch mode, every save is a submission. Should "pass after 1 attempt" count differently from "pass after 40"? The data for that is now in your `submissions` table.
+- The route computes `computeProgress` in two places (`/progress` and generate). Is that duplication a problem, or fine?

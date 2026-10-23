@@ -37,12 +37,9 @@ export function computeProgress(solved: SolvedExercise[]): Progress {
       }
       languageProgress.towardNext++;
       if (languageProgress.towardNext === SOLVES_TO_LEVEL_UP) {
-        languageProgress.level++ as Difficulty;
+        languageProgress.level++;
         languageProgress.towardNext = 0;
       }
-    }
-    if (solve.difficulty < languageProgress.level) {
-      continue;
     }
   }
   return progress;

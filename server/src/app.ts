@@ -19,6 +19,7 @@ import {
   GenerateRequestSchema,
   SubmitRequestSchema,
 } from "./schemas.js";
+import { computeProgress } from "./progress.js";
 
 // Everything the routes depend on. Only the store is required: the others default
 // to the real thing, and tests pass fakes (lesson 04 part 4, lesson 05 part 4).
@@ -61,6 +62,10 @@ export function buildApp(
       return exerciseById;
     },
   );
+  app.get("/progress", async () => {
+    const solvedExercises = store.listSolved();
+    return computeProgress(solvedExercises);
+  });
   app.post<{ Params: { id: string } }>(
     "/exercises/:id/submit",
     async (request, reply) => {
@@ -71,23 +76,32 @@ export function buildApp(
       } else if (!parsedBody.success) {
         return reply.code(400).send({ error: "bad body" });
       }
-      return checker(
+      const checkResult = await checker(
         exerciseById.lang,
         parsedBody.data.code,
         exerciseById.tests,
       );
+
+      store.addSubmission({
+        exerciseId: exerciseById.id,
+        status: checkResult.status,
+        submittedAt: new Date().toISOString(),
+      });
+      return checkResult;
     },
   );
+
   app.post("/exercises/generate", async (request, reply) => {
     const parsedBody = GenerateRequestSchema.safeParse(request.body);
     if (!parsedBody.success) {
       return reply.code(400).send({ error: "bad body" });
     }
     const { lang, topic } = parsedBody.data;
+    const progress = computeProgress(store.listSolved());
     try {
       const exercise = await generate({
         lang,
-        difficulty: 1,
+        difficulty: progress[lang].level,
         ...(topic !== undefined ? { topic } : {}),
       });
       store.add(exercise);
