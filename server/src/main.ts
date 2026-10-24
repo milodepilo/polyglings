@@ -1,6 +1,9 @@
 // Entry point: wire a store into the app and start listening.
 // Dev:  npm run dev   (restarts on file changes)
 import { buildApp } from "./app.js";
+import { claudeCli, generateExercise, type GenerationRequest } from "./generator.js";
+import { check } from "./runner.js";
+import { runDaily, startScheduler } from "./scheduler.js";
 import { SqliteStore } from "./sqlite-store.js";
 
 const store = new SqliteStore(process.env.DB_PATH ?? "polyglings.db");
@@ -20,7 +23,25 @@ if (store.list().length === 0) {
     createdAt: new Date().toISOString(),
   });
 }
-const app = buildApp({ store }, { logger: true });
+// one generate for both the route and the daily job (milestone 7b, given)
+const generate = (req: GenerationRequest) =>
+  generateExercise(req, { llm: claudeCli(), checker: check });
+const app = buildApp({ store, generate }, { logger: true });
+
+// The daily job (milestone 7b, given). SCHEDULER=off turns it off, DAILY_HOUR sets the hour.
+if (process.env.SCHEDULER !== "off") {
+  const hour = Number(process.env.DAILY_HOUR ?? 7);
+  const scheduler = startScheduler({
+    hour,
+    run: async () => {
+      const { added, failed, skipped } = await runDaily({ store, generate });
+      app.log.info({ added: added.map((e) => e.id), failed, skipped }, "daily run");
+    },
+    onError: (err) => app.log.error({ err }, "daily run crashed"),
+  });
+  app.addHook("onClose", () => scheduler.stop());
+  app.log.info(`daily run at ${hour}:00 local time`);
+}
 const port = Number(process.env.PORT ?? 3000);
 
 // 0.0.0.0 = reachable from other machines too (needed on the Pi), not just localhost

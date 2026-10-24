@@ -117,3 +117,76 @@ npx vitest run                                 # everything
 - `listOpen()` gets **all** open exercises once, and you filter per language. The alternative is a `listOpen({ lang })`, like `list`, with three queries. Which would you choose with 10 exercises? With 100,000?
 - You solve your cpp exercise at 07:05, right after the job ran. Your next cpp exercise comes tomorrow. Should solving an exercise trigger the job too? Where in the code would that go?
 - Without a `topic`, will the LLM pick "generics" for TS every time? What information could you give it (that's already in your database) to make it pick something new?
+
+## Part B: every morning at 07:00
+`runDaily` works; now it has to run by itself. Most of that is given. Your part is the one tricky calculation: **how long until the next 07:00?**
+
+### What's given
+| file | what |
+|---|---|
+| `src/scheduler.ts` | `startScheduler({ hour, run, onError })`: waits until the hour, runs, then plans the next one; returns `stop()` |
+| `src/main.ts` | one `generate` for both the route and the job; starts the scheduler and logs every run. `SCHEDULER=off` turns it off, `DAILY_HOUR=8` changes the hour |
+| `test/scheduler.test.ts` | "msUntilNext" (9 tests) and "startScheduler" (3 tests, with fake timers) |
+
+`startScheduler` calls your `msUntilNext(hour, new Date())` before every run. If yours is off, so is the alarm.
+
+### A day is not always 24 hours
+Tonight (Sunday 2026-10-25, 03:00) the clocks go back an hour in Amsterdam. From Saturday 08:00 to Sunday 07:00 is 23 hours **on the clock**, but 24 hours **in reality**. In March it goes the other way: 22 real hours.
+
+```ts
+// example: an alarm clock app (not your code!)
+const tomorrowSameTime = new Date(alarm.getTime() + 24 * 60 * 60 * 1000);  // ✗ "+24h"
+// on the night the clocks go back, the alarm goes off at 06:00 instead of 07:00
+```
+The fix: don't count milliseconds yourself. Let `Date` work with **calendar fields** (day, hour) in local time, and only at the end ask how many milliseconds apart two moments are. `Date` knows the DST rules of the time zone; you don't have to.
+
+### Things you'll need
+**Local vs UTC.** Every `Date` method comes in two versions:
+```ts
+d.setHours(7)       // 07:00 on the local clock (the Pi: Amsterdam)
+d.setUTCHours(7)    // 07:00 UTC = 09:00 in Amsterdam in summer
+```
+`setHours` takes up to four arguments: `setHours(h, min, s, ms)`. "07:00" means 07:00:00.000, not 07:00 plus whatever seconds `now` happened to have.
+
+**Overflowing days.** `setDate` takes the day of the month, and it overflows correctly:
+```ts
+// example: a library book due in 3 days
+const due = new Date(2026, 9, 30);   // Oct 30
+due.setDate(due.getDate() + 3);      // day 33 of October → Nov 2. No month logic needed
+```
+
+**A `Date` is mutable.** `setHours` changes the object itself. If that object is the caller's `now`, you've changed their "now". Make a copy first:
+```ts
+const copy = new Date(original);   // a new Date at the same moment
+```
+
+**Comparing Dates.** `<`, `<=`, `>` work (they compare the timestamps). `===` doesn't: it checks whether it's the **same object**.
+```ts
+new Date(0) < new Date(1)      // true
+new Date(0) === new Date(0)    // false! two different objects
+```
+`a.getTime() - b.getTime()` gives the difference in milliseconds.
+
+### Why "always > 0"?
+At exactly 07:00:00.000 the timer fires and `run()` starts. If `msUntilNext` said "0 ms" at that moment, the next run would start immediately after. So at exactly the hour, the answer is **tomorrow**. The test "never 0" checks that, and the fake-timer tests break too if you get it wrong.
+
+### Why `setTimeout` again every time, not `setInterval`?
+`setInterval(run, 24h)` counts 24 hours from the start, forever. After one DST change it's an hour off, permanently. A timer can also fire a little late (a busy Pi, a sleeping laptop), and with `setInterval` that adds up. `startScheduler` asks your `msUntilNext` again before every run, so each run lines up with the real clock again.
+
+### Time zones in the tests
+"07:00" depends on the time zone of the machine. The test file sets `process.env.TZ = "Europe/Amsterdam"` at the top, so the tests mean the same thing on your WSL, on the Pi and anywhere else. The first test checks that this worked.
+
+## Exercise 7b
+Fill in `msUntilNext` in `src/scheduler.ts` (see `TODO(human)`):
+```bash
+cd server
+npx vitest run test/scheduler.test.ts -t "msUntilNext"
+npx vitest run test/scheduler.test.ts            # including startScheduler
+npx vitest run                                   # everything
+```
+Then for real, without waiting until tomorrow: set `DAILY_HOUR` to the next hour and watch the log. (It calls the real `claude` for every language with nothing open.) While developing, `SCHEDULER=off npm run dev` keeps it quiet.
+
+## Food for thought (part B)
+- The Pi is off at 07:00 (power cut, update). The day is skipped. `runDaily` is safe to run twice, so what could `main.ts` do right after starting up? What does that cost you in `npm run dev` with `tsx watch`?
+- You want a button "give me my daily exercises now". Where would `runDaily` go, and why don't you have to worry about it clashing with the 07:00 run?
+- `DAILY_HOUR=25` or `DAILY_HOUR=seven`: what happens now? Where would you validate that, and with what? (You have a tool for this since milestone 2.)

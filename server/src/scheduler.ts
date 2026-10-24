@@ -1,7 +1,6 @@
 // The daily job: for every language with nothing open, generate one new exercise
 // at your current level for that language. Part A is the job itself; part B runs it every morning.
 // Lesson: ../lessons/07_scheduler.md
-import { diff } from "node:util";
 import type { GenerationRequest } from "./generator.js";
 import { computeProgress } from "./progress.js";
 import type { ExerciseStore } from "./store.js";
@@ -54,4 +53,55 @@ export async function runDaily(deps: DailyDeps): Promise<DailyResult> {
     }
   }
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Part B: run it every day at a fixed hour (lesson 07 part B)
+// ---------------------------------------------------------------------------
+
+// Milliseconds from `now` until the next time the local clock shows `hour`:00:00.000.
+// Always > 0: at exactly 07:00:00.000, the next 07:00 is tomorrow.
+export function msUntilNext(hour: number, now: Date): number {
+  const due = new Date(now);
+  due.setHours(hour, 0, 0, 0);
+  if (now.getTime() >= due.getTime()) {
+    due.setDate(due.getDate() + 1);
+  }
+  return due.getTime() - now.getTime();
+}
+
+export interface SchedulerOptions {
+  hour: number; // local time, 0-23
+  run: () => Promise<void>;
+  onError?: (err: unknown) => void; // run() threw: report it, the schedule keeps going
+}
+
+// Given. A fresh setTimeout for every run (not setInterval): each delay is measured
+// against the real clock again, so drift and daylight saving time can't pile up.
+export function startScheduler(opts: SchedulerOptions): { stop: () => void } {
+  let timer: NodeJS.Timeout | undefined;
+  let stopped = false;
+
+  const scheduleNext = () => {
+    if (stopped) return;
+    timer = setTimeout(
+      async () => {
+        try {
+          await opts.run();
+        } catch (err) {
+          opts.onError?.(err);
+        }
+        scheduleNext(); // only after run() is done: two runs never overlap
+      },
+      msUntilNext(opts.hour, new Date()),
+    );
+  };
+
+  scheduleNext();
+  return {
+    stop: () => {
+      stopped = true;
+      clearTimeout(timer);
+    },
+  };
 }
