@@ -45,3 +45,11 @@ export const SolvedExerciseSchema = ExerciseSchema.pick({
   lang: true,
   difficulty: true,
 }).extend({ solvedAt: z.string() });
+
+// Milestone 8 (given): what GET /progress returns, so the CLI can check the server's answer
+const LangProgressSchema = z.object({
+  level: z.literal(DIFFICULTY),
+  towardNext: z.number().int().min(0),
+  solved: z.number().int().min(0),
+});
+export const ProgressSchema = z.record(z.enum(LANGUAGES), LangProgressSchema);
